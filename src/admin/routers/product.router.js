@@ -1,13 +1,34 @@
 const express = require("express");
-const pool = require("../../db");
+const pool = require("../../../db");
 
 const router = express.Router();
 
-// Get all products
+// Get all products with pagination
 router.get("/", async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM public.product");
-    res.json(result.rows);
+    const page = parseInt(req.query.page) || 1; // default page 1
+    const pageSize = parseInt(req.query.pageSize) || 10; // default 10 per page
+    const offset = (page - 1) * pageSize;
+
+    // Total count
+    const totalResult = await pool.query("SELECT COUNT(*) FROM public.product");
+    const total = parseInt(totalResult.rows[0].count, 10);
+
+    // Fetch paginated rows
+    const result = await pool.query(
+      `SELECT *
+       FROM public.product
+       ORDER BY id DESC
+       LIMIT $1 OFFSET $2`,
+      [pageSize, offset]
+    );
+
+    res.json({
+      data: result.rows,
+      total, // total rows for pagination
+      page,
+      pageSize,
+    });
   } catch (err) {
     res.status(500).send(err.message);
   }
@@ -59,14 +80,28 @@ router.get("/:id/similar", async (req, res) => {
 });
 
 router.get("/withPrimaryImageAndRating", async (req, res) => {
-  const { category_id, search } = req.query;
+  const { category_id, page = 1, pageSize = 10 } = req.query;
 
   try {
+    const limit = Number(pageSize);
+    const offset = (Number(page) - 1) * limit;
+
+    // Count total products
+    let countQuery = "SELECT COUNT(*) FROM public.product p";
+    const valuesCount = [];
+
+    if (category_id) {
+      countQuery += " WHERE p.category_id = $1";
+      valuesCount.push(Number(category_id));
+    }
+
+    const countResult = await pool.query(countQuery, valuesCount);
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    // Fetch paginated products
     let query = `
       SELECT 
         p.*,
-
-        -- All images as an array of objects
         (
           SELECT json_agg(json_build_object(
             'id', i.id,
@@ -76,105 +111,96 @@ router.get("/withPrimaryImageAndRating", async (req, res) => {
           FROM public.images i
           WHERE i.product_id = p.id
         ) AS images,
-
-        -- Rating aggregation
-        (
-          SELECT ROUND(AVG(r.value)::numeric, 1)
-          FROM public.rating r
-          WHERE r.product_id = p.id
-        ) AS avg_rating,
-
-        (
-          SELECT COUNT(*)
-          FROM public.rating r
-          WHERE r.product_id = p.id
-        ) AS rating_count
-
-      FROM public.product p
-      WHERE p.active = true
-    `;
-
-    const values = [];
-    let index = 1;
-
-    if (category_id) {
-      query += ` AND p.category_id = $${index++}`;
-      values.push(category_id);
-    }
-
-    if (search) {
-      query += ` AND p.name ILIKE $${index++}`;
-      values.push(`%${search}%`);
-    }
-
-    query += ` ORDER BY p.id DESC`;
-
-    const result = await pool.query(query, values);
-    res.json(result.rows);
-  } catch (err) {
-    console.error("❌ Error in /withPrimaryImageAndRating:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-
-router.get("/withPrimaryImageAndRating/:id", async (req, res) => {
-  const { category_id } = req.query;
-  const { id } = req.params;
-
-  try {
-    let query = `
-     SELECT 
-        p.*,
-
-        -- All images as an array of objects
-        (
-          SELECT json_agg(json_build_object(
-            'id', i.id,
-            'link', i.link,
-            'priority', i.priority
-          ) ORDER BY i.priority ASC NULLS LAST, i.id ASC)
-          FROM public.images i
-          WHERE i.product_id = p.id
-        ) AS images,
-
-        -- Rating aggregation
         (
           SELECT ROUND(AVG(r.value)::numeric, 1) AS avg_rating
           FROM public.rating r
           WHERE r.product_id = p.id
         ) AS avg_rating,
-
         (
           SELECT COUNT(*) AS rating_count
           FROM public.rating r
           WHERE r.product_id = p.id
         ) AS rating_count
-
       FROM public.product p
-      WHERE p.active = true
     `;
 
     const values = [];
-    if (category_id) {
-      query += ` AND p.category_id = $1 `;
-      values.push(category_id);
-    }
-    if (id) {
-      query += ` AND p.id = $1 `;
-      values.push(id);
-    }
 
-    query += ` ORDER BY p.id DESC`;
+    if (category_id) {
+      query += " WHERE p.category_id = $1";
+      values.push(Number(category_id));
+      query += " ORDER BY p.id DESC LIMIT $2 OFFSET $3";
+      values.push(limit, offset);
+    } else {
+      query += " ORDER BY p.id DESC LIMIT $1 OFFSET $2";
+      values.push(limit, offset);
+    }
 
     const result = await pool.query(query, values);
 
-    res.json(result.rows);
+    console.log({
+      data: result.rows,
+      total,
+      page: Number(page),
+      pageSize: limit,
+    });
+
+    res.json({
+      data: result.rows,
+      total,
+      page: Number(page),
+      pageSize: limit,
+    });
   } catch (err) {
     console.error("❌ Error in /withPrimaryImageAndRating:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
+
+// router.get("/withPrimaryImageAndRating", async (req, res) => {
+//   const { category_id } = req.query;
+
+//   try {
+//     let query = `
+//       SELECT p.*,
+//              i.link AS primary_image,
+//              r.avg_rating,
+//              r.rating_count
+//       FROM "product" p
+
+//       -- Primary image (by priority)
+//       LEFT JOIN LATERAL (
+//         SELECT link
+//         FROM public.images i
+//         WHERE i.product_id = p.id
+//         ORDER BY i.priority ASC NULLS LAST, i.id ASC
+//       ) i ON true
+
+//       -- Rating aggregation
+//       LEFT JOIN LATERAL (
+//         SELECT ROUND(AVG(r.value)::numeric, 1) AS avg_rating,
+//                COUNT(*) AS rating_count
+//         FROM public.rating r
+//         WHERE r.product_id = p.id
+//       ) r ON true
+//     `;
+
+//     const values = [];
+//     if (category_id) {
+//       query += ` WHERE p.category_id = $1 `;
+//       values.push(category_id);
+//     }
+
+//     query += ` ORDER BY p.id DESC`;
+
+//     const result = await pool.query(query, values);
+
+//     res.json(result.rows);
+//   } catch (err) {
+//     console.error("❌ Error in /withPrimaryImageAndRating:", err.message);
+//     res.status(500).json({ error: err.message });
+//   }
+// });
 
 // Get one product by id
 
@@ -194,7 +220,6 @@ router.get("/:id", async (req, res) => {
         LIMIT 1
       ) i ON true
       WHERE p.id = $1
-      AND p.active = true
     `;
 
     const result = await pool.query(query, [id]);
@@ -267,12 +292,51 @@ router.post("/", async (req, res) => {
 // Update product by ID
 router.put("/:id", async (req, res) => {
   const { id } = req.params;
-  const { name, description, price, stock } = req.body;
+  const {
+    name,
+    category_id,
+    active,
+    available,
+    stock,
+    description,
+    related,
+    options,
+    price,
+    endprice,
+    end_price_date,
+  } = req.body;
 
   try {
     const result = await pool.query(
-      "UPDATE product SET name = $1, description = $2, price = $3, stock = $4 WHERE id = $5 RETURNING *",
-      [name, description, price, stock, id]
+      `UPDATE product 
+       SET 
+         name = $1,
+         category_id = $2,
+         active = $3,
+         available = $4,
+         stock = $5,
+         description = $6,
+         related = $7,               -- integer[] (no cast)
+         options = $8::jsonb,        -- JSON field
+         price = $9,
+         endprice = $10,
+         end_price_date = $11
+       WHERE id = $12
+       RETURNING *`,
+      [
+        name,
+        category_id,
+        active,
+        available ?? true, // fallback if not provided
+        stock,
+        description,
+        related || [], // send array directly
+        JSON.stringify(options ?? {}), // ensure valid json
+        price,
+        endprice,
+        end_price_date,
+        id,
+      ]
     );
 
     if (result.rows.length === 0) {
@@ -286,25 +350,32 @@ router.put("/:id", async (req, res) => {
   }
 });
 
-// Delete product by ID
+// ✅ Delete a product and its related images
 router.delete("/:id", async (req, res) => {
   const { id } = req.params;
 
   try {
-    await pool.query("DELETE FROM public.rating WHERE product_id = $1", [id]);
-    const result = await pool.query(
+    console.log("🧹 Deleting images for product:", id);
+    await pool.query("DELETE FROM public.images WHERE product_id = $1", [id]);
+
+    const deleted = await pool.query(
       "DELETE FROM public.product WHERE id = $1 RETURNING *",
       [id]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).send("❌ Product not found");
+    if (deleted.rowCount === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Product not found" });
     }
 
-    res.send(`✅ Product with id ${id} deleted successfully`);
-  } catch (err) {
-    console.error("❌ Error while deleting product:", err.message);
-    res.status(500).send(`Server error: ${err.message}`);
+    res.json({
+      success: true,
+      message: "🗑️ Product deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error while deleting product:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 

@@ -1,24 +1,40 @@
 const express = require("express");
-const pool = require("../../db");
+const pool = require("../../../db");
+
 
 const router = express.Router();
 
 router.get("/", async (req, res) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const pageSize = parseInt(req.query.pageSize) || 10;
+    const offset = (page - 1) * pageSize;
+
+    const totalRes = await pool.query("SELECT COUNT(*) FROM public.categories");
+    const total = parseInt(totalRes.rows[0].count);
+
     const result = await pool.query(
-      "SELECT * FROM public.categories WHERE active = true"
-    ); // ✅ الجدول اسمه product
-    res.json(result.rows);
+      "SELECT * FROM public.categories ORDER BY id ASC LIMIT $1 OFFSET $2",
+      [pageSize, offset]
+    );
+
+    res.json({
+      data: result.rows,
+      total,
+      page,
+      pageSize,
+    });
   } catch (err) {
     res.status(500).send(err.message);
   }
 });
 
+
 // Get one category by id
-router.get("/:id", async (req, res) => {
+router.get("/:id", async(req, res) => {
   const { id } = req.params;
-  try {
-    const result = await pool.query("SELECT * FROM public.categories WHERE id = $1", [
+  try{
+const result = await pool.query("SELECT * FROM public.categories WHERE id = $1" ,[
       id,
     ]);
     if (result.rows.length === 0)
@@ -40,14 +56,14 @@ router.post("/", async (req, res) => {
     const insertedCategories = [];
 
     for (const category of categories) {
-      const { name, created_at, active, priority, image } = category;
+      const {  name, created_at, active, priority, image } = category;
 
       const result = await pool.query(
         `INSERT INTO categories
           ( name,created_at,active,priority,image )
          VALUES ($1,$2,$3,$4,$5)
          RETURNING *`,
-        [name, created_at, active, priority, image]
+        [ name, created_at, active, priority, image]
       );
 
       insertedCategories.push(result.rows[0]);
@@ -68,7 +84,7 @@ router.put("/:id", async (req, res) => {
     const result = await pool.query(
       `UPDATE categories
        SET name = $1, priority = $2, image = $3  WHERE id = $4 RETURNING *`,
-      [name, priority, image, id]
+      [name, priority, image , id]
     );
 
     if (result.rows.length === 0) {
@@ -102,5 +118,10 @@ router.delete("/:id", async (req, res) => {
     res.status(500).send(`Server error: ${err.message}`);
   }
 });
+
+
+
+
+
 
 module.exports = router;

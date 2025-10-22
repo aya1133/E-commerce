@@ -1,13 +1,57 @@
 require("dotenv").config();
-
+const cors = require("cors");
 const express = require("express");
 const routes = require("./src/routes");
+const adminRoutes = require("./src/admin/routes");
+const { uploadDirect } = require("@uploadcare/upload-client");
+const pool = require("./db");
+
+const multer = require("multer");
+
+// fileData must be `Blob` or `File` or `Buffer`
 
 const app = express();
 const port = 3000;
 
 app.use(express.json());
-app.use('/api', routes);
+app.use(cors());
+app.use("/api", routes);
+app.use("/api/admin", adminRoutes);
+
+const upload = multer({ storage: multer.memoryStorage() });
+
+app.post(
+  "/upload/product/:id/:priority",
+  upload.single("file"),
+  async (req, res) => {
+    const { id, priority } = req.params;
+
+    try {
+      const fileData = req.file.buffer; // Buffer from multer
+
+      const result = await uploadDirect(fileData, {
+        publicKey: process.env.UPLOADCARE_PUBLIC_KEY, // from your .env file
+        store: "auto",
+      });
+
+      const link = `https://60g5s8sfy4.ucarecd.net/${result.uuid}/-/preview/736x736/`;
+
+      const AddProductImage = await pool.query(
+        "INSERT INTO images (product_id , link, priority) VALUES ($1, $2, $3) RETURNING *",
+        [id, link, priority]
+      );
+
+      res.json({
+        success: true,
+        link,
+        image: AddProductImage.rows[0], // ✅ now VS Code will highlight it
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+);
 
 app.use("/uploads", express.static("src/uploads"));
 
@@ -15,134 +59,175 @@ app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
 });
 
+app.put("/upload/product", upload.single("file"), async (req, res) => {
+  const { imageId, productId } = req.query; // ✅ Get both from query: ?imageId=5&productId=12
+  console.log("Received query:", req.query);
 
-/*
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
-const bcrypt = require("bcrypt");
-
-pool
-  .connect()
-  .then(() => console.log("✅ Connected to PostgreSQL"))
-  .catch((err) => console.error("❌ Connection error", err.stack));
-
-app.get("/users", async (req, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM users");
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).send(err.message);
+  if (!imageId || !productId) {
+    return res
+      .status(400)
+      .json({ success: false, message: "imageId and productId are required" });
   }
-});
-app.post("/users", async (req, res) => {
-  const { name, username, email, password } = req.body;
+
   try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const result = await pool.query(
-      "INSERT INTO users (name, username, email, password) VALUES ($1, $2, $3, $4) RETURNING *",
-      [name, username, email, hashedPassword]
-    );
-    res.status(201).json(result.rows[0]); // يرجع المستخدم الجديد
-  } catch (err) {
-    res.status(500).send(err.message);
-  }
-});
-app.post("/login", async (req, res) => {
-  const { email, password } = req.body;
-  try {
-    const userResult = await pool.query(
-      "SELECT * FROM users WHERE email = $1",
-      [email]
+    const fileData = req.file.buffer;
+
+    // Upload image to Uploadcare
+    const result = await uploadDirect(fileData, {
+      publicKey: process.env.UPLOADCARE_PUBLIC_KEY,
+      store: "auto",
+    });
+
+    // Generate link
+    const link = `https://60g5s8sfy4.ucarecd.net/${result.uuid}/-/preview/736x736/`;
+
+    // ✅ Update both link and product_id
+    const updated = await pool.query(
+      "UPDATE images SET link = $1 WHERE product_id = $2 AND link = $3 AND priority = 0 RETURNING *",
+      [link, productId, imageId]
     );
 
-    const user = userResult.rows[0];
+    if (updated.rowCount === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Image not found" });
+    }
 
-    if (!user) return res.status(404).send("User not found");
-    const match = await bcrypt.compare(password, user.password);
-    console.log("Stored hash:", user.password);
-    console.log("Typed password:", password);
-    if (!match) return res.status(401).send("Incorrect password");
-    res.send("Login successful ✅");
-  } catch (err) {
-    res.status(500).send(err.message);
+    res.json({
+      success: true,
+      message: "✅ Image updated successfully",
+      link,
+      image: updated.rows[0],
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
+app.put("/upload/image", upload.single("file"), async (req, res) => {
+  const { imageId } = req.query; // ?imageId=12
 
-app.post("/banner", async (req, res) => {
-  const {
-    id,
-    name,
-    priority,
-    active,
-    type,
-    map,
-    background,
-    hidden,
-    created_at,
-  } = req.body;
+  console.log("Received query:", req.query);
+
+  if (!imageId) {
+    return res
+      .status(400)
+      .json({ success: false, message: "imageId is required" });
+  }
+
   try {
-    const result = await pool.query(
-      "INSERT INTO banner (id, name , priority, active, type, map , background, hidden, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *",
-      [id, name, priority, active, type, map, background, hidden, created_at]
+    const fileData = req.file.buffer;
+
+    // Upload to Uploadcare
+    const result = await uploadDirect(fileData, {
+      publicKey: process.env.UPLOADCARE_PUBLIC_KEY,
+      store: "auto",
+    });
+
+    // Generate new image link
+    const link = `https://60g5s8sfy4.ucarecd.net//${result.uuid}/-/preview/736x736/`;
+
+    // ✅ Update just this image (by its id)
+    const updated = await pool.query(
+      "UPDATE images SET link = $1 WHERE id = $2 RETURNING *",
+      [link, imageId]
     );
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    res.status(500).send(err.message);
+
+    if (updated.rowCount === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Image not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "✅ Image updated successfully",
+      link,
+      image: updated.rows[0],
+    });
+  } catch (error) {
+    console.error("Upload error:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-app.get("/banner", async (req, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM banner");
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).send(err.message);
+// ✅ Delete an image by ID
+app.delete("/upload/image", async (req, res) => {
+  const { imageId } = req.query;
+
+  if (!imageId) {
+    return res.status(400).json({ success: false, message: "imageId is required" });
   }
-});
-app.post("/product", async (req, res) => {
-  const {
-    name,
-    active,
-    options,
-    description,
-    related,
-    created_at,
-    price,
-    endprice,
-    endpricedate,
-    stock,
-    available,
-  } = req.body;
+
   try {
-    const result = await pool.query(
-      "INSERT INTO product (name , active, options, description , related , created_at, price, endprice, end_price_date, stock, available) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,$10, $11) RETURNING *",
-      [
-        name,
-        active,
-        options,
-        description,
-        related,
-        created_at,
-        price,
-        endprice,
-        endpricedate,
-        stock,
-        available,
-      ]
+    const deleted = await pool.query(
+      "DELETE FROM public.images WHERE id = $1 RETURNING *",
+      [imageId]
     );
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    res.status(500).send(err.message);
+
+    if (deleted.rowCount === 0) {
+      return res.status(404).json({ success: false, message: "Image not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "🗑️ Image deleted successfully",
+      deleted: deleted.rows[0],
+    });
+  } catch (error) {
+    console.error("Delete error:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-app.get("/product", async (req, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM product");
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).send(err.message);
-  }
-}); */
 
+app.post("/upload/category/:id", upload.single("file"), async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const fileData = req.file.buffer;
+
+    const result = await uploadDirect(fileData, {
+      publicKey: process.env.UPLOADCARE_PUBLIC_KEY,
+      store: "auto",
+    });
+
+    const link = `https://60g5s8sfy4.ucarecdn.com/${result.uuid}/-/preview/736x736/`;
+
+    // Assuming your "categories" table has a column named "image"
+    const updated = await pool.query(
+      "UPDATE categories SET image = $1 WHERE id = $2 RETURNING *",
+      [link, id]
+    );
+
+    res.json({ success: true, link, category: updated.rows[0] });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post("/upload/banner/:id", upload.single("file"), async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const fileData = req.file.buffer;
+
+    const result = await uploadDirect(fileData, {
+      publicKey: process.env.UPLOADCARE_PUBLIC_KEY,
+      store: "auto",
+    });
+
+    const link = `https://60g5s8sfy4.ucarecdn.com/${result.uuid}/-/preview/736x736/`;
+
+    const updated = await pool.query(
+      "UPDATE banner SET background = $1 WHERE id = $2 RETURNING *",
+      [link, id]
+    );
+
+    res.json({ success: true, link, banner: updated.rows[0] });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});

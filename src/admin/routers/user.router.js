@@ -1,18 +1,38 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
-const pool = require("../../db");
+const pool = require("../../../db");
+
 const jwt = require("jsonwebtoken");
 
 const router = express.Router();
 
 router.get("/", async (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const pageSize = parseInt(req.query.pageSize) || 10;
+  const offset = (page - 1) * pageSize;
+
   try {
-    const result = await pool.query("SELECT * FROM public.users");
-    res.json(result.rows);
+    // Get total users count
+    const totalResult = await pool.query("SELECT COUNT(*) FROM public.users");
+    const total = parseInt(totalResult.rows[0].count);
+
+    // Fetch paginated users
+    const result = await pool.query(
+      "SELECT * FROM public.users ORDER BY id DESC LIMIT $1 OFFSET $2",
+      [pageSize, offset]
+    );
+
+    res.json({
+      data: result.rows,
+      total,
+      page,
+      pageSize,
+    });
   } catch (err) {
     res.status(500).send(err.message);
   }
 });
+
 
 // GET user by id
 router.get("/:id", async (req, res) => {

@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "nodemon index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "keywords": [],
   "author": "",
@@ -12,11 +13,17 @@
   "type": "commonjs",
   "dependencies": {
     "@uploadcare/rest-client": "^6.17.0",
+    "@uploadcare/upload-client": "^6.18.0",
     "bcrypt": "^6.0.0",
+    "cors": "^2.8.5",
+    "cros": "^1.1.0",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
-    "nodemon": "^3.1.10",
     "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
   }
 }

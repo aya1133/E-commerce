@@ -1,14 +1,80 @@
 const express = require("express");
-const pool = require("../../db");
+const pool = require("../../../db");
 
 const router = express.Router();
 
 router.get("/", async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM voucher"); // ✅ الجدول اسمه product
-    res.json(result.rows);
+    const page = parseInt(req.query.page) || 1;
+    const pageSize = parseInt(req.query.pageSize) || 10;
+    const offset = (page - 1) * pageSize;
+
+    // Total count
+    const totalResult = await pool.query("SELECT COUNT(*) FROM voucher");
+    const total = parseInt(totalResult.rows[0].count, 10);
+
+    // Paginated data
+    const result = await pool.query(
+      "SELECT * FROM voucher ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+      [pageSize, offset]
+    );
+
+    res.json({
+      data: result.rows,
+      total,
+      page,
+      pageSize,
+    });
   } catch (err) {
-    res.status(500).send(err.message);
+    console.error("❌ Error fetching vouchers:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Decrease voucher usage when used in an order
+router.put("/use/:code", async (req, res) => {
+  const { code } = req.params;
+
+  try {
+    // Check if voucher exists, active, not expired, and has usage left
+    const voucherResult = await pool.query(
+      `SELECT * FROM voucher 
+       WHERE code = $1 
+       AND active = true 
+       AND (no_of_usage IS NULL OR no_of_usage > 0) 
+       AND expire_date > NOW()`,
+      [code]
+    );
+
+    if (voucherResult.rows.length === 0) {
+      return res.status(404).json({ error: "❌ Voucher not found or no usages left" });
+    }
+
+    const voucher = voucherResult.rows[0];
+
+    // Decrease usage if it has a limit
+    if (voucher.no_of_usage !== null) {
+      const updated = await pool.query(
+        `UPDATE voucher 
+         SET no_of_usage = no_of_usage - 1
+         WHERE code = $1
+         RETURNING *`,
+        [code]
+      );
+
+      // If usage reaches 0, deactivate the voucher
+      if (updated.rows[0].no_of_usage <= 0) {
+        await pool.query(`UPDATE voucher SET active = false WHERE code = $1`, [code]);
+      }
+
+      return res.json(updated.rows[0]);
+    }
+
+    // If usage is unlimited (null), just return it
+    res.json(voucher);
+  } catch (err) {
+    console.error("❌ Error updating voucher usage:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -17,10 +83,10 @@ router.get("/code/:code", async (req, res) => {
   const { code } = req.params;
   try {
     const result = await pool.query(
-  `SELECT * FROM voucher 
+      `SELECT * FROM voucher 
    WHERE code = $1 AND active = true AND expire_date > NOW()`,
-  [code]
-);
+      [code]
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).send("❌ voucher not found");
@@ -33,63 +99,11 @@ router.get("/code/:code", async (req, res) => {
   }
 });
 
-router.put("/use/:code", async (req, res) => { 
-  const { code } = req.params;
-  const { orderTotal } = req.body; // <-- send order total from frontend
-
-  try {
-    // Fetch active, usable, non-expired voucher
-    const voucherResult = await pool.query(
-      `SELECT * FROM voucher 
-       WHERE code = $1 
-       AND active = true 
-       AND (no_of_usage IS NULL OR no_of_usage > 0) 
-       AND expire_date > NOW()`,
-      [code]
-    );
-
-    if (voucherResult.rows.length === 0) {
-      return res.status(404).json({ invalid: true, message: "Voucher not found or no usages left" });
-    }
-
-    const voucher = voucherResult.rows[0];
-
-    // Only check min value
-    if (voucher.min_value && orderTotal < voucher.min_value) {
-      return res.status(400).json({ error: `Your total is below the minimum value of this voucher ($${voucher.min_value})` });
-    }
-
-    // Decrease usage if limited
-    if (voucher.no_of_usage !== null) {
-      const updated = await pool.query(
-        `UPDATE voucher 
-         SET no_of_usage = no_of_usage - 1
-         WHERE code = $1
-         RETURNING *`,
-        [code]
-      );
-
-      if (updated.rows[0].no_of_usage <= 0) {
-        await pool.query(`UPDATE voucher SET active = false WHERE code = $1`, [code]);
-      }
-
-      return res.json(updated.rows[0]);
-    }
-
-    // Return voucher if unlimited usage
-    res.json(voucher);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-
 // Get one voucher by id
-router.get("/:id", async(req, res) => {
+router.get("/:id", async (req, res) => {
   const { id } = req.params;
-  try{
-const result = await pool.query("SELECT * FROM voucher WHERE id = $1" ,[
+  try {
+    const result = await pool.query("SELECT * FROM voucher WHERE id = $1", [
       id,
     ]);
     if (result.rows.length === 0)
@@ -100,30 +114,52 @@ const result = await pool.query("SELECT * FROM voucher WHERE id = $1" ,[
   }
 });
 
-
-
 router.post("/", async (req, res) => {
   let vouchers = req.body;
 
   if (!Array.isArray(vouchers)) {
-   vouchers = [vouchers]; // إذا دخلتِ object واحد نحوله array
+    vouchers = [vouchers]; // إذا دخلتِ object واحد نحوله array
   }
 
   try {
     const insertedVoucher = [];
 
     for (const voucher of vouchers) {
-      const {  name, code, min_value, max_value, expire_date,type,active,created_at, is_first, no_of_usage, value } = voucher;
+      const {
+        name,
+        code,
+        min_value,
+        max_value,
+        expire_date,
+        type,
+        active,
+        created_at,
+        is_first,
+        no_of_usage,
+        value,
+      } = voucher;
 
       const result = await pool.query(
         `INSERT INTO voucher
           (  name, code, min_value, max_value, expire_date,type,active,created_at, is_first, no_of_usage, value  )
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          RETURNING *`,
-        [ name, code, min_value, max_value, expire_date,type,active,created_at, is_first, no_of_usage, value  ]
+        [
+          name,
+          code,
+          min_value,
+          max_value,
+          expire_date,
+          type,
+          active,
+          created_at,
+          is_first,
+          no_of_usage,
+          value,
+        ]
       );
 
-   insertedVoucher.push(result.rows[0]);
+      insertedVoucher.push(result.rows[0]);
     }
 
     res.status(201).json(insertedVoucher);
@@ -135,14 +171,14 @@ router.post("/", async (req, res) => {
 //update voucher by id
 router.put("/:id", async (req, res) => {
   const { id } = req.params;
-  const {  name, code, min_value, max_value, expire_date,value  } = req.body;
+  const { name, code, min_value, max_value, expire_date, value } = req.body;
 
   try {
     const result = await pool.query(
       `UPDATE voucher
        SET name = $1, code = $2, min_value = $3, max_value = $4, expire_date = $5, value =$6
        WHERE id = $7 RETURNING *`,
-      [  name, code, min_value, max_value, expire_date,value, id]
+      [name, code, min_value, max_value, expire_date, value, id]
     );
 
     if (result.rows.length === 0) {
@@ -177,6 +213,5 @@ router.delete("/:id", async (req, res) => {
     res.status(500).send(`Server error: ${err.message}`);
   }
 });
-
 
 module.exports = router;

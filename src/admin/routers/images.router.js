@@ -1,5 +1,6 @@
 const express = require("express");
-const pool = require("../../db"); // تأكدي المسار صحيح حسب مشروعك
+const pool = require("../../../db");
+// تأكدي المسار صحيح حسب مشروعك
 
 const router = express.Router();
 
