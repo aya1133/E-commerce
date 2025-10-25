@@ -234,6 +234,47 @@ router.get("/:id", async (req, res) => {
     res.status(500).send(err.message);
   }
 });
+// Set an image as the main image
+// Set an image as main
+router.put("/images/:id/setMain", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const imageResult = await pool.query(
+      "SELECT * FROM public.images WHERE id = $1",
+      [id]
+    );
+    if (imageResult.rows.length === 0) {
+      return res.status(404).json({ error: "Image not found" });
+    }
+
+    const image = imageResult.rows[0];
+    const productId = image.product_id;
+
+    await pool.query("BEGIN");
+
+    // Demote current main image
+    await pool.query(
+      "UPDATE public.images SET priority = 1 WHERE product_id = $1 AND priority = 0",
+      [productId]
+    );
+
+    // Promote selected image
+    await pool.query(
+      "UPDATE public.images SET priority = 0 WHERE id = $1",
+      [id]
+    );
+
+    await pool.query("COMMIT");
+
+    res.json({ success: true, message: "Image set as main successfully" });
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 router.post("/", async (req, res) => {
   let products = req.body;

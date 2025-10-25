@@ -18,7 +18,10 @@ router.get("/", async (req, res) => {
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   try {
-    const result = await pool.query("SELECT * FROM public.users WHERE id = $1", [id]);
+    const result = await pool.query(
+      "SELECT * FROM public.users WHERE id = $1",
+      [id]
+    );
     if (result.rows.length === 0) return res.status(404).send("User not found");
     res.json(result.rows[0]);
   } catch (err) {
@@ -35,7 +38,13 @@ router.post("/", async (req, res) => {
       "INSERT INTO users (name, username, email, password) VALUES ($1, $2, $3, $4) RETURNING *",
       [name, username, email, hashedPassword]
     );
-    res.status(201).json(result.rows[0]);
+    const user = result.rows[0];
+
+    const token = jwt.sign(
+      { userId: user.id, username: user.name },
+      process.env.jwt
+    );
+    res.status(201).json({ sucsses: true, token });
   } catch (err) {
     res.status(500).send(err.message);
   }
