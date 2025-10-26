@@ -235,7 +235,6 @@ router.get("/:id", async (req, res) => {
   }
 });
 // Set an image as the main image
-// Set an image as main
 router.put("/images/:id/setMain", async (req, res) => {
   const { id } = req.params;
 
