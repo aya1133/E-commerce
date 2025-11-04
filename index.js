@@ -16,7 +16,7 @@ const port =process.env.PORT || 3002;
 app.use(express.json());
 app.use(cors());
 app.use("/", routes);
-app.use("/api/admin", adminRoutes);
+app.use("/admin", adminRoutes);
 
 const upload = multer({ storage: multer.memoryStorage() });
 
