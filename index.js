@@ -11,7 +11,7 @@ const multer = require("multer");
 // fileData must be `Blob` or `File` or `Buffer`
 
 const app = express();
-const port = 3000;
+const port =process.env.PORT || 3002;
 
 app.use(express.json());
 app.use(cors());
